@@ -1,4 +1,5 @@
 anthropic
+tavily-python
 PyQt6
 PyOpenGL
 PyOpenGL_accelerate
