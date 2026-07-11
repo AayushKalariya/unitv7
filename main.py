@@ -7,17 +7,24 @@ load_dotenv()
 
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap, QColor
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QObject, pyqtSignal
 
 from ui.orb_widget import OrbWindow
 from ui.chat_panel import ChatPanel
 from services.claude_api import stream_response
 from services.calendar_api import get_upcoming_events, format_events_for_prompt
+from services.voice import VoiceAssistant, preload_whisper_model
 from storage.history import (
     load_store, save_store, create_session, set_active_session,
     get_active_session, update_active_messages, clear_active_messages,
     delete_session, list_sessions,
 )
+
+
+class _VoiceSignals(QObject):
+    wake = pyqtSignal()
+    transcript = pyqtSignal(str)
+    error = pyqtSignal(str)
 
 
 def make_tray_icon() -> QIcon:
@@ -30,6 +37,8 @@ class OrbAssistant:
     def __init__(self):
         self._app = QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
+
+        threading.Thread(target=preload_whisper_model, daemon=True).start()
 
         self._store = load_store()
         self._messages: list[dict] = get_active_session(self._store)["messages"]
@@ -61,6 +70,17 @@ class OrbAssistant:
         self._tray.show()
 
         self._orb.show()
+
+        self._voice_signals = _VoiceSignals()
+        self._voice_signals.wake.connect(self._on_voice_wake)
+        self._voice_signals.transcript.connect(self._on_voice_transcript)
+        self._voice_signals.error.connect(self._on_voice_error)
+        self._voice = VoiceAssistant(
+            on_wake=self._voice_signals.wake.emit,
+            on_transcript=self._voice_signals.transcript.emit,
+            on_error=self._voice_signals.error.emit,
+        )
+        self._voice.start()
 
     def _toggle_panel(self):
         if self._panel_visible:
@@ -110,6 +130,19 @@ class OrbAssistant:
             if self._messages and self._messages[-1]["role"] == "user":
                 self._messages.pop()
 
+    def _on_voice_wake(self):
+        self._orb.set_listening(True)
+        if not self._panel_visible:
+            self._toggle_panel()
+
+    def _on_voice_transcript(self, text: str):
+        self._orb.set_listening(False)
+        self._on_message(text)
+
+    def _on_voice_error(self, msg: str):
+        self._orb.set_listening(False)
+        print(f"[voice] {msg}")
+
     def _on_clear_history(self):
         self._messages.clear()
         clear_active_messages(self._store)
@@ -144,6 +177,7 @@ class OrbAssistant:
         self._panel.show_session_list(list_sessions(self._store), self._store["active"])
 
     def _quit(self):
+        self._voice.stop()
         self._tray.hide()
         self._app.quit()
 
