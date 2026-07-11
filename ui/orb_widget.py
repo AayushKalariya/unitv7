@@ -38,6 +38,7 @@ in vec2 vUV;
 out vec4 fragColor;
 uniform float uTime;
 uniform vec2 uResolution;
+uniform float uListening;
 
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -123,6 +124,10 @@ void main() {
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.5);
     color += vec3(1.0, 0.45, 0.05) * rim * (0.6 + 0.4 * pulse);
 
+    // Listening state — tint toward blue "active" color
+    vec3 listenColor = vec3(0.10, 0.45, 1.0);
+    color = mix(color, listenColor * (0.3 + 0.7 * diff + fill), uListening * 0.65);
+
     // Smooth sphere edge
     float edge = smoothstep(0.0, 0.04, 1.0 - dist);
     float alpha = edge;
@@ -143,9 +148,14 @@ class OrbGLWidget(QOpenGLWidget):
         self._shader = None
         self._vao = None
         self._start_time = time.time()
+        self._listening_target = 0.0
+        self._listening_amount = 0.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.update)
         self._timer.start(16)  # ~60fps
+
+    def set_listening(self, active: bool):
+        self._listening_target = 1.0 if active else 0.0
 
     def initializeGL(self):
         glClearColor(0, 0, 0, 0)
@@ -165,11 +175,13 @@ class OrbGLWidget(QOpenGLWidget):
         glUseProgram(self._shader)
 
         t = time.time() - self._start_time
+        self._listening_amount += (self._listening_target - self._listening_amount) * 0.15
         glUniform1f(glGetUniformLocation(self._shader, "uTime"), t)
         glUniform2f(
             glGetUniformLocation(self._shader, "uResolution"),
             self.width(), self.height()
         )
+        glUniform1f(glGetUniformLocation(self._shader, "uListening"), self._listening_amount)
 
         glBindVertexArray(self._vao)
         glDrawArrays(GL_TRIANGLES, 0, 6)
@@ -205,6 +217,9 @@ class OrbWindow(QWidget):
 
         pos = self._load_position()
         self.move(pos)
+
+    def set_listening(self, active: bool):
+        self._gl.set_listening(active)
 
     def _load_position(self) -> QPoint:
         path = os.path.abspath(CONFIG_FILE)

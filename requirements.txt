@@ -6,3 +6,7 @@ PyOpenGL_accelerate
 google-api-python-client
 google-auth-oauthlib
 python-dotenv
+openwakeword
+pvrecorder
+faster-whisper
+numpy
