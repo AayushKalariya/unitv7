@@ -1,0 +1,7 @@
+anthropic
+PyQt6
+PyOpenGL
+PyOpenGL_accelerate
+google-api-python-client
+google-auth-oauthlib
+python-dotenv
