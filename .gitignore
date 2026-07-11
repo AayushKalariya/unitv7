@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+venv/
+.venv/
+env/
+.env/
+
+# Secrets & credentials
+.env
+token.json
+credentials.json
+*.key
+*.pem
+
+# Project data
+chat_history.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
