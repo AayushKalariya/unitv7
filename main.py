@@ -13,7 +13,11 @@ from ui.orb_widget import OrbWindow
 from ui.chat_panel import ChatPanel
 from services.claude_api import stream_response
 from services.calendar_api import get_upcoming_events, format_events_for_prompt
-from storage.history import load_history, save_history, clear_history
+from storage.history import (
+    load_store, save_store, create_session, set_active_session,
+    get_active_session, update_active_messages, clear_active_messages,
+    delete_session, list_sessions,
+)
 
 
 def make_tray_icon() -> QIcon:
@@ -27,7 +31,8 @@ class OrbAssistant:
         self._app = QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
 
-        self._messages: list[dict] = load_history()
+        self._store = load_store()
+        self._messages: list[dict] = get_active_session(self._store)["messages"]
         self._panel_visible = False
 
         self._orb = OrbWindow(
@@ -38,6 +43,10 @@ class OrbAssistant:
         self._panel = ChatPanel()
         self._panel.message_submitted.connect(self._on_message)
         self._panel.clear_history_requested = self._on_clear_history
+        self._panel.new_chat_requested.connect(self._on_new_chat)
+        self._panel.session_selected.connect(self._on_session_selected)
+        self._panel.session_delete_requested.connect(self._on_session_deleted)
+        self._panel.history_opened.connect(self._refresh_session_list)
 
         if self._messages:
             self._panel.load_history(self._messages)
@@ -93,7 +102,8 @@ class OrbAssistant:
             self._panel.stream_done()
 
             self._messages.append({"role": "assistant", "content": full_text})
-            save_history(self._messages)
+            update_active_messages(self._store, self._messages)
+            save_store(self._store)
 
         except Exception as e:
             self._panel.stream_error(str(e))
@@ -102,7 +112,36 @@ class OrbAssistant:
 
     def _on_clear_history(self):
         self._messages.clear()
-        clear_history()
+        clear_active_messages(self._store)
+        save_store(self._store)
+
+    def _on_new_chat(self):
+        session = create_session(self._store)
+        save_store(self._store)
+        self._messages = session["messages"]
+        self._panel.clear_messages_view()
+
+    def _on_session_selected(self, session_id: str):
+        set_active_session(self._store, session_id)
+        save_store(self._store)
+        self._messages = get_active_session(self._store)["messages"]
+        self._panel.clear_messages_view()
+        if self._messages:
+            self._panel.load_history(self._messages)
+
+    def _on_session_deleted(self, session_id: str):
+        was_active = self._store["active"] == session_id
+        delete_session(self._store, session_id)
+        save_store(self._store)
+        if was_active:
+            self._messages = get_active_session(self._store)["messages"]
+            self._panel.clear_messages_view()
+            if self._messages:
+                self._panel.load_history(self._messages)
+        self._refresh_session_list()
+
+    def _refresh_session_list(self):
+        self._panel.show_session_list(list_sessions(self._store), self._store["active"])
 
     def _quit(self):
         self._tray.hide()

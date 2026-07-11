@@ -14,11 +14,12 @@ class _StreamSignals(QObject):
 
 
 class MessageBubble(QFrame):
-    def __init__(self, text: str, is_user: bool, parent=None):
+    def __init__(self, text: str, is_user: bool, max_width: int = 260, parent=None):
         super().__init__(parent)
         self._is_user = is_user
         self._label = QLabel(text)
         self._label.setWordWrap(True)
+        self._label.setMaximumWidth(max_width)
         self._label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._label.setFont(QFont("Segoe UI", 10))
         self._label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -34,8 +35,8 @@ class MessageBubble(QFrame):
                 QLabel {
                     color: #000000;
                     background: #F0F0F0;
-                    border-radius: 12px;
-                    padding: 8px 12px;
+                    border-radius: 14px;
+                    padding: 8px 13px;
                 }
             """)
         else:
@@ -45,9 +46,9 @@ class MessageBubble(QFrame):
                 QLabel {
                     color: #FFFFFF;
                     background: #1A1A1A;
-                    border-radius: 12px;
+                    border-radius: 14px;
                     border: 1px solid #333333;
-                    padding: 8px 12px;
+                    padding: 8px 13px;
                 }
             """)
         self.setStyleSheet("QFrame { background: transparent; }")
@@ -57,6 +58,9 @@ class MessageBubble(QFrame):
 
     def set_text(self, text: str):
         self._label.setText(text)
+
+    def set_max_width(self, max_width: int):
+        self._label.setMaximumWidth(max_width)
 
 
 class ChatInput(QTextEdit):
@@ -99,8 +103,59 @@ _EDGE_TOP    = 4
 _EDGE_BOTTOM = 8
 
 
+class SessionItem(QFrame):
+    clicked = pyqtSignal(str)
+    delete_clicked = pyqtSignal(str)
+
+    def __init__(self, session_id: str, title: str, subtitle: str, is_active: bool, parent=None):
+        super().__init__(parent)
+        self._id = session_id
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        bg = "#1D1D1D" if is_active else "transparent"
+        self.setStyleSheet(f"""
+            QFrame {{ background: {bg}; border-radius: 8px; }}
+            QFrame:hover {{ background: #1D1D1D; }}
+        """)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 8, 8, 8)
+        row.setSpacing(6)
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        title_lbl = QLabel(title)
+        title_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        title_lbl.setStyleSheet("color: #EEEEEE; background: transparent;")
+        sub_lbl = QLabel(subtitle)
+        sub_lbl.setFont(QFont("Segoe UI", 8))
+        sub_lbl.setStyleSheet("color: #666666; background: transparent;")
+        col.addWidget(title_lbl)
+        col.addWidget(sub_lbl)
+        row.addLayout(col)
+        row.addStretch()
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(20, 20)
+        del_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        del_btn.setStyleSheet("""
+            QPushButton { background: transparent; color: #555555; border: none; font-size: 10px; }
+            QPushButton:hover { color: #FF5F57; }
+        """)
+        del_btn.clicked.connect(lambda: self.delete_clicked.emit(self._id))
+        row.addWidget(del_btn)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._id)
+        super().mousePressEvent(event)
+
+
 class ChatPanel(QWidget):
     message_submitted = pyqtSignal(str)
+    new_chat_requested = pyqtSignal()
+    session_selected = pyqtSignal(str)
+    session_delete_requested = pyqtSignal(str)
+    history_opened = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -129,6 +184,7 @@ class ChatPanel(QWidget):
         self._stream_signals.error.connect(self._on_stream_error)
         self._current_bubble: MessageBubble | None = None
         self._streaming = False
+        self._bubbles: list[MessageBubble] = []
 
         self._build_ui()
 
@@ -185,33 +241,41 @@ class ChatPanel(QWidget):
         hl.addWidget(title)
         hl.addStretch()
 
-        self._min_btn = QPushButton("－")
-        self._min_btn.setFixedSize(26, 22)
-        self._min_btn.setToolTip("Minimize")
-        self._min_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._min_btn.setStyleSheet("""
-            QPushButton {
-                background: #222222; color: #888888;
-                border: none; border-radius: 4px; font-size: 13px;
-            }
-            QPushButton:hover { background: #333333; color: #FFFFFF; }
-        """)
-        self._min_btn.clicked.connect(self._toggle_minimize)
+        _icon_btn_style = """
+            QPushButton {{
+                background: #1C1C1C; color: #888888;
+                border: none; border-radius: 6px; font-size: {size}px;
+            }}
+            QPushButton:hover {{ background: #2E2E2E; color: #FFFFFF; }}
+        """
 
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setFixedSize(44, 22)
-        self._clear_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._clear_btn.setStyleSheet("""
-            QPushButton {
-                background: #222222; color: #888888;
-                border: none; border-radius: 4px; font-size: 10px;
-            }
-            QPushButton:hover { background: #333333; color: #FFFFFF; }
-        """)
+        def _make_icon_btn(icon: str, tooltip: str, font_size: int = 12) -> QPushButton:
+            btn = QPushButton(icon)
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(tooltip)
+            btn.setCursor(Qt.CursorShape.ArrowCursor)
+            btn.setStyleSheet(_icon_btn_style.format(size=font_size))
+            return btn
+
+        self._history_btn = _make_icon_btn("☰", "Chat history")
+        self._history_btn.clicked.connect(self._toggle_history_view)
+
+        self._new_btn = _make_icon_btn("＋", "New chat", font_size=14)
+        self._new_btn.clicked.connect(self._on_new_chat)
+
+        self._clear_btn = _make_icon_btn("⟲", "Clear this chat", font_size=13)
         self._clear_btn.clicked.connect(self._on_clear)
 
-        hl.addWidget(self._clear_btn)
-        hl.addWidget(self._min_btn)
+        self._min_btn = _make_icon_btn("－", "Minimize")
+        self._min_btn.clicked.connect(self._toggle_minimize)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        btn_row.addWidget(self._history_btn)
+        btn_row.addWidget(self._new_btn)
+        btn_row.addWidget(self._clear_btn)
+        btn_row.addWidget(self._min_btn)
+        hl.addLayout(btn_row)
         root.addWidget(self._header)
 
         # ── Body (collapsible) ────────────────────────────────────────
@@ -245,6 +309,30 @@ class ChatPanel(QWidget):
         self._scroll.setWidget(self._messages_widget)
         body_layout.addWidget(self._scroll)
 
+        # History (session list) overlay
+        self._history_scroll = QScrollArea()
+        self._history_scroll.setWidgetResizable(True)
+        self._history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._history_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical {
+                background: #111111; width: 4px; border-radius: 2px; margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #444444; border-radius: 2px; min-height: 20px;
+            }
+        """)
+        self._history_list_widget = QWidget()
+        self._history_list_widget.setStyleSheet("background: transparent;")
+        self._history_layout = QVBoxLayout(self._history_list_widget)
+        self._history_layout.setSpacing(4)
+        self._history_layout.setContentsMargins(2, 2, 2, 2)
+        self._history_layout.addStretch()
+        self._history_scroll.setWidget(self._history_list_widget)
+        self._history_scroll.hide()
+        body_layout.addWidget(self._history_scroll)
+        self._showing_history = False
+
         # Loading
         self._loading = QLabel("thinking…")
         self._loading.setFont(QFont("Segoe UI", 9))
@@ -254,10 +342,10 @@ class ChatPanel(QWidget):
         body_layout.addWidget(self._loading)
 
         # Divider
-        div = QFrame()
-        div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet("color: #222222; background: #222222; max-height: 1px;")
-        body_layout.addWidget(div)
+        self._div = QFrame()
+        self._div.setFrameShape(QFrame.Shape.HLine)
+        self._div.setStyleSheet("color: #222222; background: #222222; max-height: 1px;")
+        body_layout.addWidget(self._div)
 
         # Input row
         input_row = QHBoxLayout()
@@ -280,7 +368,9 @@ class ChatPanel(QWidget):
 
         input_row.addWidget(self._input)
         input_row.addWidget(self._send_btn)
-        body_layout.addLayout(input_row)
+        self._input_wrap = QWidget()
+        self._input_wrap.setLayout(input_row)
+        body_layout.addWidget(self._input_wrap)
 
         # Resize grip
         grip_row = QHBoxLayout()
@@ -392,16 +482,23 @@ class ChatPanel(QWidget):
             return
         self.message_submitted.emit(text)
 
-    def add_user_message(self, text: str):
-        bubble = MessageBubble(text, is_user=True)
+    def _bubble_max_width(self) -> int:
+        w = self._scroll.viewport().width() or (self.width() - 40)
+        return max(140, int(w * 0.76))
+
+    def _add_bubble(self, text: str, is_user: bool) -> "MessageBubble":
+        bubble = MessageBubble(text, is_user=is_user, max_width=self._bubble_max_width())
         self._messages_layout.insertWidget(self._messages_layout.count() - 1, bubble)
+        self._bubbles.append(bubble)
+        return bubble
+
+    def add_user_message(self, text: str):
+        self._add_bubble(text, is_user=True)
         self._scroll_to_bottom()
 
     def start_assistant_message(self):
         self._loading.hide()
-        bubble = MessageBubble("", is_user=False)
-        self._messages_layout.insertWidget(self._messages_layout.count() - 1, bubble)
-        self._current_bubble = bubble
+        self._current_bubble = self._add_bubble("", is_user=False)
         self._streaming = True
         self._send_btn.setEnabled(False)
         self._scroll_to_bottom()
@@ -432,19 +529,69 @@ class ChatPanel(QWidget):
         self._current_bubble = None
         self._send_btn.setEnabled(True)
         self._loading.hide()
-        err = MessageBubble(f"Error: {msg}", is_user=False)
-        self._messages_layout.insertWidget(self._messages_layout.count() - 1, err)
+        self._add_bubble(f"Error: {msg}", is_user=False)
         self._scroll_to_bottom()
 
     def _on_clear(self):
-        while self._messages_layout.count() > 1:
-            item = self._messages_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self.clear_messages_view()
         self.clear_history_requested()
 
     def clear_history_requested(self):
         pass
+
+    # ── Session history ──────────────────────────────────────────────
+
+    def _toggle_history_view(self):
+        if self._showing_history:
+            self._hide_history_view()
+        else:
+            self._history_btn.setText("💬")
+            self._history_btn.setToolTip("Back to chat")
+            self._scroll.hide()
+            self._loading.hide()
+            self._div.hide()
+            self._input_wrap.hide()
+            self._history_scroll.show()
+            self._showing_history = True
+            self.history_opened.emit()
+
+    def _hide_history_view(self):
+        self._history_btn.setText("☰")
+        self._history_btn.setToolTip("Chat history")
+        self._history_scroll.hide()
+        self._scroll.show()
+        self._div.show()
+        self._input_wrap.show()
+        self._showing_history = False
+
+    def _on_new_chat(self):
+        self._hide_history_view()
+        self.new_chat_requested.emit()
+
+    def show_session_list(self, sessions: list[dict], active_id: str):
+        while self._history_layout.count() > 1:
+            item = self._history_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for s in sessions:
+            item = SessionItem(
+                s["id"], s["title"], s.get("updated_at", "")[:16].replace("T", " "),
+                is_active=(s["id"] == active_id),
+            )
+            item.clicked.connect(self._on_session_clicked)
+            item.delete_clicked.connect(self.session_delete_requested.emit)
+            self._history_layout.insertWidget(self._history_layout.count() - 1, item)
+
+    def _on_session_clicked(self, session_id: str):
+        self._hide_history_view()
+        self.session_selected.emit(session_id)
+
+    def clear_messages_view(self):
+        while self._messages_layout.count() > 1:
+            item = self._messages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._bubbles.clear()
 
     def load_history(self, messages: list[dict]):
         for msg in messages:
@@ -452,18 +599,21 @@ class ChatPanel(QWidget):
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
-            if role == "user":
-                bubble = MessageBubble(content, is_user=True)
-            elif role == "assistant":
-                bubble = MessageBubble(content, is_user=False)
-            else:
+            if role not in ("user", "assistant"):
                 continue
-            self._messages_layout.insertWidget(self._messages_layout.count() - 1, bubble)
+            self._add_bubble(content, is_user=(role == "user"))
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._bubbles:
+            mw = self._bubble_max_width()
+            for bubble in self._bubbles:
+                bubble.set_max_width(mw)
 
     def reposition_near_orb(self, orb_pos, orb_size, screen_rect):
         pw, ph = self.width(), self.height()
