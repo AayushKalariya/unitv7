@@ -10,3 +10,9 @@ openwakeword
 pvrecorder
 faster-whisper
 numpy
+
+# ── RAG ──────────────────────────────────────────────
+docling
+chonkie
+fastembed
+supabase

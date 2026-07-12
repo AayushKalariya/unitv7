@@ -9,14 +9,19 @@ MODEL = "claude-sonnet-5"
 MAX_TOKENS = 4096
 
 
-def build_system_prompt(calendar_context: str, user_name: str = "User") -> str:
+def build_system_prompt(
+    calendar_context: str,
+    user_name: str = "User",
+    rag_context: str = "",
+) -> str:
     now = datetime.datetime.now().strftime("%A, %B %d, %Y %I:%M %p")
+    rag_block = f"\n\n{rag_context}\n" if rag_context else ""
     return f"""You are Orb, a personal AI assistant running as a desktop widget.
 Current date and time: {now}
 User name: {user_name}
 
 {calendar_context}
-
+{rag_block}
 Be concise, helpful, and conversational. When relevant, proactively reference the user's calendar context.
 
 You have a web_search tool. Use it whenever a question needs current info, facts you're unsure of, or anything after your knowledge cutoff."""
@@ -26,12 +31,13 @@ def stream_response(
     messages: list[dict],
     calendar_context: str,
     user_name: str = "User",
+    rag_context: str = "",
 ) -> Generator[str, None, None]:
     import anthropic
     from services.web_search import WEB_SEARCH_TOOL, web_search
 
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    system_prompt = build_system_prompt(calendar_context, user_name)
+    system_prompt = build_system_prompt(calendar_context, user_name, rag_context)
 
     working_messages = list(messages)
 
