@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QLabel, QTextEdit, QPushButton, QFrame, QSizeGrip,
+    QLabel, QTextEdit, QPushButton, QFrame, QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QRect, QEvent
 from PyQt6.QtGui import QKeyEvent, QFont, QPainter, QColor, QPen, QBrush, QPainterPath
@@ -95,6 +95,21 @@ class ChatInput(QTextEdit):
             super().keyPressEvent(event)
 
 
+# Shared scrollbar styling — thin handle, inset a few px from the panel's
+# rounded edge so it never hugs the corner, arrow buttons removed.
+_SCROLLBAR_QSS = """
+    QScrollArea { border: none; background: transparent; }
+    QScrollBar:vertical {
+        background: transparent; width: 6px; margin: 2px 2px 2px 0;
+    }
+    QScrollBar::handle:vertical {
+        background: #3A3A3A; border-radius: 2px; min-height: 24px;
+    }
+    QScrollBar::handle:vertical:hover { background: #555555; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+"""
+
 _GRIP = 6
 _EDGE_NONE   = 0
 _EDGE_LEFT   = 1
@@ -156,6 +171,7 @@ class ChatPanel(QWidget):
     session_selected = pyqtSignal(str)
     session_delete_requested = pyqtSignal(str)
     history_opened = pyqtSignal()
+    file_attached = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -228,11 +244,14 @@ class ChatPanel(QWidget):
         hl.setSpacing(8)
 
         dot_row = QHBoxLayout()
-        dot_row.setSpacing(5)
+        dot_row.setSpacing(6)
         for color in ("#FF5F57", "#FEBC2E", "#28C840"):
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 10px; background: transparent;")
-            dot_row.addWidget(dot)
+            dot = QLabel()
+            dot.setFixedSize(11, 11)
+            dot.setStyleSheet(
+                f"background: {color}; border-radius: 6px;"
+            )
+            dot_row.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addLayout(dot_row)
 
         title = QLabel("Orb Assistant")
@@ -282,23 +301,14 @@ class ChatPanel(QWidget):
         self._body = QWidget()
         self._body.setStyleSheet("background: transparent;")
         body_layout = QVBoxLayout(self._body)
-        body_layout.setContentsMargins(12, 10, 12, 10)
+        body_layout.setContentsMargins(12, 10, 12, 6)
         body_layout.setSpacing(8)
 
         # Scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical {
-                background: #111111; width: 4px; border-radius: 2px; margin: 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #444444; border-radius: 2px; min-height: 20px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
+        self._scroll.setStyleSheet(_SCROLLBAR_QSS)
 
         self._messages_widget = QWidget()
         self._messages_widget.setStyleSheet("background: transparent;")
@@ -313,15 +323,7 @@ class ChatPanel(QWidget):
         self._history_scroll = QScrollArea()
         self._history_scroll.setWidgetResizable(True)
         self._history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._history_scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical {
-                background: #111111; width: 4px; border-radius: 2px; margin: 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #444444; border-radius: 2px; min-height: 20px;
-            }
-        """)
+        self._history_scroll.setStyleSheet(_SCROLLBAR_QSS)
         self._history_list_widget = QWidget()
         self._history_list_widget.setStyleSheet("background: transparent;")
         self._history_layout = QVBoxLayout(self._history_list_widget)
@@ -350,10 +352,25 @@ class ChatPanel(QWidget):
         # Input row
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
+
+        self._attach_btn = QPushButton("📎")
+        self._attach_btn.setFixedSize(42, 42)
+        self._attach_btn.setToolTip("Attach a file (PDF, DOCX, notes, …)")
+        self._attach_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._attach_btn.setStyleSheet("""
+            QPushButton {
+                background: #1C1C1C; color: #AAAAAA;
+                border: 1px solid #333333; border-radius: 8px; font-size: 15px;
+            }
+            QPushButton:hover { background: #2E2E2E; color: #FFFFFF; }
+            QPushButton:disabled { background: #161616; color: #444444; }
+        """)
+        self._attach_btn.clicked.connect(self._on_attach_clicked)
+
         self._input = ChatInput()
         self._input.submitted.connect(self._handle_submit)
 
-        self._send_btn = QPushButton("↑")
+        self._send_btn = QPushButton("↑︎")  # FE0E = force mono glyph, not colored emoji
         self._send_btn.setFixedSize(42, 42)
         self._send_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._send_btn.setStyleSheet("""
@@ -366,20 +383,16 @@ class ChatPanel(QWidget):
         """)
         self._send_btn.clicked.connect(self._send_from_button)
 
+        input_row.addWidget(self._attach_btn)
         input_row.addWidget(self._input)
         input_row.addWidget(self._send_btn)
         self._input_wrap = QWidget()
         self._input_wrap.setLayout(input_row)
         body_layout.addWidget(self._input_wrap)
 
-        # Resize grip
-        grip_row = QHBoxLayout()
-        grip_row.setContentsMargins(0, 0, 2, 0)
-        grip_row.addStretch()
-        size_grip = QSizeGrip(self)
-        size_grip.setStyleSheet("background: transparent;")
-        grip_row.addWidget(size_grip)
-        body_layout.addLayout(grip_row)
+        # Resizing is handled by the custom edge-drag logic (mousePress/Move
+        # on the window frame), so no separate QSizeGrip corner is needed —
+        # dropping it keeps the bottom padding symmetric with the sides.
 
         root.addWidget(self._body)
 
@@ -476,6 +489,43 @@ class ChatPanel(QWidget):
         if text:
             self._input.clear()
             self._handle_submit(text)
+
+    # ── File attach ───────────────────────────────────────────────────
+
+    def _on_attach_clicked(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Attach files",
+            "",
+            "Documents (*.pdf *.docx *.pptx *.xlsx *.md *.txt *.csv *.html *.png *.jpg);;All files (*.*)",
+        )
+        for path in paths:
+            if path:
+                self.file_attached.emit(path)
+
+    def set_attach_enabled(self, enabled: bool):
+        self._attach_btn.setEnabled(enabled)
+
+    def add_status_message(self, text: str):
+        """Small centered note (e.g. file-ingest progress/results)."""
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setFont(QFont("Segoe UI", 8))
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            "color: #777777; background: #141414; border: 1px solid #262626;"
+            "border-radius: 10px; padding: 5px 10px;"
+        )
+        wrap = QFrame()
+        wrap.setStyleSheet("background: transparent;")
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch()
+        row.addWidget(lbl)
+        row.addStretch()
+        self._messages_layout.insertWidget(self._messages_layout.count() - 1, wrap)
+        self._scroll_to_bottom()
+        return lbl
 
     def _handle_submit(self, text: str):
         if self._streaming:
