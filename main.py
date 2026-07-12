@@ -15,6 +15,7 @@ from services.claude_api import stream_response
 from services.calendar_api import get_upcoming_events, format_events_for_prompt
 from services.voice import VoiceAssistant, preload_whisper_model
 from services.rag import ingest_file, retrieve, is_configured as rag_configured
+from storage.templates import list_templates, format_templates_for_prompt
 from storage.history import (
     load_store, save_store, create_session, set_active_session,
     get_active_session, update_active_messages, clear_active_messages,
@@ -145,6 +146,8 @@ class OrbAssistant:
             events = get_upcoming_events(max_results=10)
             calendar_ctx = format_events_for_prompt(events)
 
+            template_ctx = format_templates_for_prompt(list_templates())
+
             rag_ctx = ""
             last_user = next(
                 (m["content"] for m in reversed(self._messages)
@@ -157,7 +160,9 @@ class OrbAssistant:
             full_text = ""
             first = True
 
-            for token in stream_response(self._messages, calendar_ctx, rag_context=rag_ctx):
+            for token in stream_response(
+                self._messages, calendar_ctx, rag_context=rag_ctx, template_context=template_ctx
+            ):
                 if first:
                     self._panel.stream_start()
                     first = False
