@@ -1,36 +1,15 @@
-import os
 import datetime
 
-CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "..", "credentials.json")
-TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "token.json")
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+from services.google_auth import get_credentials
 
 
 def get_upcoming_events(max_results: int = 10) -> list[dict]:
-    credentials_path = os.path.abspath(CREDENTIALS_FILE)
-    token_path = os.path.abspath(TOKEN_FILE)
-
-    if not os.path.exists(credentials_path):
-        return []
-
     try:
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
 
-        creds = None
-        if os.path.exists(token_path):
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open(token_path, "w") as f:
-                f.write(creds.to_json())
+        creds = get_credentials()
+        if not creds:
+            return []
 
         service = build("calendar", "v3", credentials=creds)
         now = datetime.datetime.utcnow().isoformat() + "Z"

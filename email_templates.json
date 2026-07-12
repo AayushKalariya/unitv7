@@ -1,0 +1,8 @@
+{
+  "networking": {
+    "name": "networking",
+    "subject": "Hey Nice to meet you",
+    "body": "Hey {name} I saw you work at {company}, I would love to know more.",
+    "updated_at": "2026-07-12T02:59:18.625140"
+  }
+}
