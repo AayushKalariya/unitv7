@@ -4,5 +4,11 @@
     "subject": "Hey Nice to meet you",
     "body": "Hey {name} I saw you work at {company}, I would love to know more.",
     "updated_at": "2026-07-12T02:59:18.625140"
+  },
+  "CS advice": {
+    "name": "CS advice",
+    "subject": "Advice for CS",
+    "body": "Hello {name}, nice to meet you. I saw you were working at {company} and wanted to know more. Would love to hop on a call any time your free",
+    "updated_at": "2026-07-12T11:42:50.970308"
   }
 }
